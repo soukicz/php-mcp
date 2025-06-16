@@ -1,0 +1,42 @@
+{
+  "name": "soukicz/mcp",
+  "description": "MCP server",
+  "keywords": [
+    "llm",
+    "ai",
+    "openai",
+    "anthropic",
+    "mcp"
+  ],
+  "type": "library",
+  "license": [
+    "BSD-3-Clause"
+  ],
+  "autoload": {
+    "psr-4": {
+      "Soukicz\\Mcp\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Soukicz\\Mcp\\Tests\\": "tests/"
+    }
+  },
+  "authors": [
+    {
+      "name": "Petr Soukup",
+      "email": "soukup@simplia.cz"
+    }
+  ],
+  "require": {
+    "soukicz/llm": "dev-master"
+  },
+  "require-dev": {
+    "phpstan/phpstan": "^2.1",
+    "phpunit/phpunit": "^10.5"
+  },
+  "suggest": {
+    "league/oauth2-server": "For OAuth 2.1 authentication support (see examples/LeagueOAuthServerAdapter.php)",
+    "firebase/php-jwt": "For JWT token handling if implementing custom OAuth"
+  }
+}
