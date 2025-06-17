@@ -6,6 +6,7 @@ namespace Soukicz\Mcp\Tests;
 
 use PHPUnit\Framework\TestCase;
 use Soukicz\Mcp\McpServer;
+use Soukicz\Mcp\Session\ArraySessionManager;
 use Soukicz\Mcp\Exception\InvalidParamsException;
 
 class McpServerValidationTest extends TestCase
@@ -14,7 +15,8 @@ class McpServerValidationTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->server = new McpServer();
+        $sessionManager = new ArraySessionManager();
+        $this->server = new McpServer(['name' => 'test-server', 'version' => '1.0.0'], $sessionManager);
     }
 
     public function testEmptyServerNameThrowsException(): void
@@ -22,7 +24,7 @@ class McpServerValidationTest extends TestCase
         $this->expectException(InvalidParamsException::class);
         $this->expectExceptionMessage('Server name cannot be empty');
         
-        new McpServer(['name' => '']);
+        new McpServer(['name' => ''], new ArraySessionManager());
     }
 
     public function testEmptyToolNameThrowsException(): void
@@ -81,7 +83,7 @@ class McpServerValidationTest extends TestCase
     public function testValidServerInfo(): void
     {
         $serverInfo = ['name' => 'test-server', 'version' => '2.0.0'];
-        $server = new McpServer($serverInfo);
+        $server = new McpServer($serverInfo, new ArraySessionManager());
         
         $sessionId = $this->initializeSession($server);
         $sessionInfo = $server->getSessionInfo($sessionId);

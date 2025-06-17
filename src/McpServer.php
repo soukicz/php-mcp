@@ -10,7 +10,6 @@ use GuzzleHttp\Psr7\Response;
 use RuntimeException;
 use Soukicz\Mcp\Session\SessionManagerInterface;
 use Soukicz\Mcp\Session\ArraySessionManager;
-use Soukicz\Mcp\Exception\InvalidRequestException;
 use Soukicz\Mcp\Exception\MethodNotFoundException;
 use Soukicz\Mcp\Exception\InvalidParamsException;
 
@@ -23,14 +22,14 @@ class McpServer
     ];
     private SessionManagerInterface $sessionManager;
 
-    public function __construct(array $serverInfo = [], ?SessionManagerInterface $sessionManager = null)
+    public function __construct(array $serverInfo, SessionManagerInterface $sessionManager)
     {
         if (isset($serverInfo['name']) && empty($serverInfo['name'])) {
             throw new InvalidParamsException('Server name cannot be empty');
         }
         
         $this->serverInfo = array_merge($this->serverInfo, $serverInfo);
-        $this->sessionManager = $sessionManager ?? new ArraySessionManager();
+        $this->sessionManager = $sessionManager;
     }
 
     public function registerTool(string $name, string $description, array $inputSchema, callable $handler): void
@@ -73,7 +72,7 @@ class McpServer
     public function handleRequest(RequestInterface $request): ResponseInterface
     {
         if ($request->getMethod() !== 'POST') {
-            return $this->createErrorResponse(-32600, 'Invalid Request', 'Only POST method is supported');
+            return $this->createErrorResponse(-32600, 'Invalid Request', 'Only POST method is supported', null);
         }
 
         // Handle session management
@@ -84,22 +83,22 @@ class McpServer
 
         $contentType = $request->getHeaderLine('Content-Type');
         if (strpos($contentType, 'application/json') === false) {
-            return $this->createErrorResponse(-32600, 'Invalid Request', 'Content-Type must be application/json');
+            return $this->createErrorResponse(-32600, 'Invalid Request', 'Content-Type must be application/json', null);
         }
 
         $body = (string) $request->getBody();
         $data = json_decode($body, true);
 
         if (json_last_error() !== JSON_ERROR_NONE) {
-            return $this->createErrorResponse(-32700, 'Parse error', 'Invalid JSON');
+            return $this->createErrorResponse(-32700, 'Parse error', 'Invalid JSON', null);
         }
 
         if (!isset($data['jsonrpc']) || $data['jsonrpc'] !== '2.0') {
-            return $this->createErrorResponse(-32600, 'Invalid Request', 'Missing or invalid jsonrpc version');
+            return $this->createErrorResponse(-32600, 'Invalid Request', 'Missing or invalid jsonrpc version', $data['id'] ?? null);
         }
 
         if (!isset($data['method'])) {
-            return $this->createErrorResponse(-32600, 'Invalid Request', 'Missing method');
+            return $this->createErrorResponse(-32600, 'Invalid Request', 'Missing method', $data['id'] ?? null);
         }
 
         $id = $data['id'] ?? null;
@@ -112,18 +111,18 @@ class McpServer
         // Validate request ID for non-notifications
         if (!$isNotification) {
             if ($id === null) {
-                return $this->createErrorResponse(-32600, 'Invalid Request', 'Request ID must not be null');
+                return $this->createErrorResponse(-32600, 'Invalid Request', 'Request ID must not be null', null);
             }
             
             if ($this->sessionManager->isRequestIdUsed($sessionId, (string)$id)) {
-                return $this->createErrorResponse(-32600, 'Invalid Request', 'Request ID already used in this session');
+                return $this->createErrorResponse(-32600, 'Invalid Request', 'Request ID already used in this session', $id);
             }
             $this->sessionManager->markRequestIdUsed($sessionId, (string)$id);
         }
 
         // Check if session is initialized for restricted methods
         if (!$this->sessionManager->isSessionInitialized($sessionId) && !in_array($method, ['initialize', 'initialized', 'ping'])) {
-            return $this->createErrorResponse(-32600, 'Invalid Request', 'Session not initialized');
+            return $this->createErrorResponse(-32600, 'Invalid Request', 'Session not initialized', $id);
         }
 
         try {
@@ -188,7 +187,7 @@ class McpServer
         return [
             'protocolVersion' => '2024-11-05',
             'capabilities' => [
-                'tools' => []
+                'tools' => new \stdClass()
             ],
             'serverInfo' => $this->serverInfo
         ];
@@ -265,7 +264,7 @@ class McpServer
             $response['id'] = $id;
         }
 
-        return new Response(200, ['Content-Type' => 'application/json'], json_encode($response));
+        return new Response(200, ['Content-Type' => 'application/json'], $this->encodeJson($response));
     }
 
     private function createErrorResponse(int $code, string $message, ?string $data = null, $id = null): ResponseInterface
@@ -288,7 +287,18 @@ class McpServer
             $response['id'] = $id;
         }
 
-        return new Response(200, ['Content-Type' => 'application/json'], json_encode($response));
+        return new Response(200, ['Content-Type' => 'application/json'], $this->encodeJson($response));
+    }
+
+    private function encodeJson(array $data): string
+    {
+        // Custom JSON encoding to handle MCP-specific requirements
+        $json = json_encode($data, JSON_UNESCAPED_SLASHES);
+        
+        // Fix the capabilities.tools empty array to be an empty object
+        $json = preg_replace('/"capabilities":\s*\{\s*"tools":\s*\[\s*\]/', '"capabilities":{"tools":{}', $json);
+        
+        return $json;
     }
 
     private function generateSessionId(): string

@@ -5,12 +5,14 @@ declare(strict_types=1);
 require_once __DIR__ . '/vendor/autoload.php';
 
 use Soukicz\Mcp\McpServer;
+use Soukicz\Mcp\Session\FileSessionManager;
 use GuzzleHttp\Psr7\ServerRequest;
 
+$sessionManager = new FileSessionManager(sys_get_temp_dir(), 3600, true); // Enable auto-initialization
 $server = new McpServer([
     'name' => 'example-mcp-server',
     'version' => '1.0.0'
-]);
+], $sessionManager);
 
 $server->registerTool(
     'echo',
@@ -59,4 +61,5 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     echo "MCP Server is running. Send POST requests with JSON-RPC 2.0 format.\n";
     echo "Available methods: initialize, tools/list, tools/call\n";
     echo "Available tools: echo, add\n";
+    echo "Auto-initialization: " . ($sessionManager->isAutoInitializeEnabled() ? 'ENABLED' : 'DISABLED') . "\n";
 }

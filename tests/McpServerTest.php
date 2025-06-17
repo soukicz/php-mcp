@@ -6,6 +6,7 @@ namespace Soukicz\Mcp\Tests;
 
 use PHPUnit\Framework\TestCase;
 use Soukicz\Mcp\McpServer;
+use Soukicz\Mcp\Session\ArraySessionManager;
 use GuzzleHttp\Psr7\ServerRequest;
 use GuzzleHttp\Psr7\Utils;
 
@@ -15,7 +16,8 @@ class McpServerTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->server = new McpServer();
+        $sessionManager = new ArraySessionManager();
+        $this->server = new McpServer(['name' => 'test-server', 'version' => '1.0.0'], $sessionManager);
         
         $this->server->registerTool(
             'echo',
