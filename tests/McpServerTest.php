@@ -4,17 +4,10 @@ declare(strict_types=1);
 
 namespace Soukicz\Mcp\Tests;
 
-use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
-use Soukicz\Llm\Message\LLMMessageContents;
-use Soukicz\Llm\Tool\CallbackToolDefinition;
 use Soukicz\Mcp\McpServer;
-use Soukicz\Mcp\Model\McpCapabilities;
-use Soukicz\Mcp\Model\McpPrompt;
-use Soukicz\Mcp\Model\McpPromptContent;
-use Soukicz\Mcp\Model\McpPromptMessage;
-use Soukicz\Mcp\Model\McpResource;
-use Soukicz\Mcp\Model\McpServerInfo;
+use GuzzleHttp\Psr7\ServerRequest;
+use GuzzleHttp\Psr7\Utils;
 
 class McpServerTest extends TestCase
 {
@@ -22,180 +15,247 @@ class McpServerTest extends TestCase
 
     protected function setUp(): void
     {
-        $serverInfo = new McpServerInfo(
-            name: 'Test Server',
-            version: '1.0.0'
+        $this->server = new McpServer();
+        
+        $this->server->registerTool(
+            'echo',
+            'Echo back the input message',
+            [
+                'type' => 'object',
+                'properties' => [
+                    'message' => ['type' => 'string']
+                ],
+                'required' => ['message']
+            ],
+            function (array $args): string {
+                return $args['message'] ?? '';
+            }
         );
+    }
 
-        $capabilities = new McpCapabilities(
-            tools: true,
-            prompts: true,
-            resources: true
-        );
-
-        $tool = new CallbackToolDefinition(
-            'test_tool',
-            'A test tool',
-            ['type' => 'object'],
-            static fn(array $args) => LLMMessageContents::fromString('result: ' . ($args['input'] ?? 'default'))
-        );
-
-        $prompt = new McpPrompt(
-            name: 'test_prompt',
-            description: 'A test prompt',
-            arguments: [],
-            messages: [
-                new McpPromptMessage(
-                    role: 'user',
-                    content: new McpPromptContent(type: 'text', text: 'Test message')
-                )
+    public function testInitialize(): void
+    {
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json']);
+        $request = $request->withBody(Utils::streamFor(json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'initialize',
+            'params' => [
+                'clientInfo' => ['name' => 'test-client', 'version' => '1.0.0']
             ]
-        );
+        ])));
 
-        $resource = new McpResource(
-            uri: 'test://resource',
-            name: 'Test Resource',
-            description: 'A test resource',
-            mimeType: 'text/plain',
-            content: 'test content',
-            text: 'test content'
-        );
+        $response = $this->server->handleRequest($request);
+        $body = json_decode((string) $response->getBody(), true);
 
-        $this->server = new McpServer(
-            serverInfo: $serverInfo,
-            capabilities: $capabilities,
-            tools: [$tool],
-            prompts: [$prompt],
-            resources: [$resource]
-        );
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals('2.0', $body['jsonrpc']);
+        $this->assertEquals(1, $body['id']);
+        $this->assertArrayHasKey('result', $body);
+        $this->assertEquals('2024-11-05', $body['result']['protocolVersion']);
+        $this->assertTrue($response->hasHeader('Mcp-Session-Id'));
     }
 
-    public function testGetServerInfo(): void
+    public function testToolsList(): void
     {
-        $info = $this->server->getServerInfo();
+        // First initialize session
+        $sessionId = $this->initializeSession();
+        
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json', 'Mcp-Session-Id' => $sessionId]);
+        $request = $request->withBody(Utils::streamFor(json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 2,
+            'method' => 'tools/list'
+        ])));
 
-        $this->assertEquals('Test Server', $info->name);
-        $this->assertEquals('1.0.0', $info->version);
+        $response = $this->server->handleRequest($request);
+        $body = json_decode((string) $response->getBody(), true);
+
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals('2.0', $body['jsonrpc']);
+        $this->assertArrayHasKey('result', $body);
+        $this->assertArrayHasKey('tools', $body['result']);
+        $this->assertCount(1, $body['result']['tools']);
+        $this->assertEquals('echo', $body['result']['tools'][0]['name']);
     }
 
-    public function testGetCapabilities(): void
+    public function testToolsCall(): void
     {
-        $capabilities = $this->server->getCapabilities();
+        // First initialize session
+        $sessionId = $this->initializeSession();
+        
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json', 'Mcp-Session-Id' => $sessionId]);
+        $request = $request->withBody(Utils::streamFor(json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 3,
+            'method' => 'tools/call',
+            'params' => [
+                'name' => 'echo',
+                'arguments' => ['message' => 'Hello World']
+            ]
+        ])));
 
-        $this->assertTrue($capabilities->tools);
-        $this->assertTrue($capabilities->prompts);
-        $this->assertTrue($capabilities->resources);
-        $this->assertFalse($capabilities->logging);
+        $response = $this->server->handleRequest($request);
+        $body = json_decode((string) $response->getBody(), true);
+
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals('2.0', $body['jsonrpc']);
+        $this->assertArrayHasKey('result', $body);
+        $this->assertArrayHasKey('content', $body['result']);
+        $this->assertEquals('Hello World', $body['result']['content'][0]['text']);
     }
 
-    public function testGetTools(): void
+    public function testInvalidMethod(): void
     {
-        $tools = $this->server->getTools();
+        $request = new ServerRequest('GET', '/mcp');
+        
+        $response = $this->server->handleRequest($request);
+        $body = json_decode((string) $response->getBody(), true);
 
-        $this->assertCount(1, $tools);
-        $this->assertEquals('test_tool', $tools[0]->getName());
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals('2.0', $body['jsonrpc']);
+        $this->assertArrayHasKey('error', $body);
+        $this->assertEquals(-32600, $body['error']['code']);
     }
 
-    public function testCallTool(): void
+    public function testInvalidJson(): void
     {
-        $result = $this->server->callTool('test_tool', ['input' => 'hello']);
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json']);
+        $request = $request->withBody(Utils::streamFor('invalid json'));
 
-        $this->assertInstanceOf(LLMMessageContents::class, $result);
-        $this->assertEquals('result: hello', $result->getMessages()[0]->getText());
+        $response = $this->server->handleRequest($request);
+        $body = json_decode((string) $response->getBody(), true);
+
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals('2.0', $body['jsonrpc']);
+        $this->assertArrayHasKey('error', $body);
+        $this->assertEquals(-32700, $body['error']['code']);
     }
 
-    public function testCallToolWithoutArguments(): void
+    public function testUnknownTool(): void
     {
-        $result = $this->server->callTool('test_tool', []);
+        // First initialize session
+        $sessionId = $this->initializeSession();
+        
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json', 'Mcp-Session-Id' => $sessionId]);
+        $request = $request->withBody(Utils::streamFor(json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 4,
+            'method' => 'tools/call',
+            'params' => [
+                'name' => 'unknown_tool',
+                'arguments' => []
+            ]
+        ])));
 
-        $this->assertInstanceOf(LLMMessageContents::class, $result);
-        $this->assertEquals('result: default', $result->getMessages()[0]->getText());
+        $response = $this->server->handleRequest($request);
+        $body = json_decode((string) $response->getBody(), true);
+
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals('2.0', $body['jsonrpc']);
+        $this->assertArrayHasKey('error', $body);
+        $this->assertEquals(-32602, $body['error']['code']);
     }
 
-    public function testCallNonExistentTool(): void
+    public function testSessionLifecycle(): void
     {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage("Tool 'nonexistent' not found");
-
-        $this->server->callTool('nonexistent', []);
+        // Test complete session lifecycle
+        $sessionId = $this->initializeSession();
+        
+        // Test that session exists
+        $sessionInfo = $this->server->getSessionInfo($sessionId);
+        $this->assertNotNull($sessionInfo);
+        $this->assertTrue($sessionInfo['initialized']);
+        
+        // Test session termination
+        $this->server->terminateSession($sessionId);
+        $this->assertNull($this->server->getSessionInfo($sessionId));
     }
 
-    public function testGetPrompts(): void
+    public function testDuplicateRequestId(): void
     {
-        $prompts = $this->server->getPrompts();
-
-        $this->assertCount(1, $prompts);
-        $this->assertEquals('test_prompt', $prompts[0]->name);
+        $sessionId = $this->initializeSession();
+        
+        // Send first request
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json', 'Mcp-Session-Id' => $sessionId]);
+        $request = $request->withBody(Utils::streamFor(json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 100,
+            'method' => 'tools/list'
+        ])));
+        
+        $response = $this->server->handleRequest($request);
+        $this->assertEquals(200, $response->getStatusCode());
+        
+        // Send duplicate request ID
+        $response2 = $this->server->handleRequest($request);
+        $body = json_decode((string) $response2->getBody(), true);
+        
+        $this->assertArrayHasKey('error', $body);
+        $this->assertEquals(-32600, $body['error']['code']);
+        $this->assertStringContainsString('Request ID already used', $body['error']['data']);
     }
 
-    public function testGetPrompt(): void
+    public function testUninitializedSession(): void
     {
-        $prompt = $this->server->getPrompt('test_prompt');
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json']);
+        $request = $request->withBody(Utils::streamFor(json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'tools/list'
+        ])));
 
-        $this->assertEquals('test_prompt', $prompt->name);
-        $this->assertEquals('A test prompt', $prompt->description);
+        $response = $this->server->handleRequest($request);
+        $body = json_decode((string) $response->getBody(), true);
+
+        $this->assertArrayHasKey('error', $body);
+        $this->assertEquals(-32600, $body['error']['code']);
+        $this->assertStringContainsString('Session not initialized', $body['error']['data']);
     }
 
-    public function testGetNonExistentPrompt(): void
+    public function testNotification(): void
     {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage("Prompt 'nonexistent' not found");
+        $sessionId = $this->initializeSession();
+        
+        // Send notification (no ID)
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json', 'Mcp-Session-Id' => $sessionId]);
+        $request = $request->withBody(Utils::streamFor(json_encode([
+            'jsonrpc' => '2.0',
+            'method' => 'ping'
+        ])));
 
-        $this->server->getPrompt('nonexistent');
+        $response = $this->server->handleRequest($request);
+        $this->assertEquals(204, $response->getStatusCode()); // No Content for notifications
     }
 
-    public function testGetResources(): void
+    private function initializeSession(): string
     {
-        $resources = $this->server->getResources();
+        static $initId = 0;
+        $initId++;
+        
+        // Send initialize request
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json']);
+        $request = $request->withBody(Utils::streamFor(json_encode([
+            'jsonrpc' => '2.0',
+            'id' => $initId,
+            'method' => 'initialize',
+            'params' => [
+                'clientInfo' => ['name' => 'test-client', 'version' => '1.0.0']
+            ]
+        ])));
 
-        $this->assertCount(1, $resources);
-        $this->assertEquals('test://resource', $resources[0]->uri);
-    }
-
-    public function testGetResource(): void
-    {
-        $resource = $this->server->getResource('test://resource');
-
-        $this->assertEquals('test://resource', $resource->uri);
-        $this->assertEquals('Test Resource', $resource->name);
-        $this->assertEquals('test content', $resource->text);
-    }
-
-    public function testGetNonExistentResource(): void
-    {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage("Resource 'nonexistent' not found");
-
-        $this->server->getResource('nonexistent');
-    }
-
-    public function testCreateSession(): void
-    {
-        $session = $this->server->createSession('2024-11-05', ['tools' => true]);
-
-        $this->assertNotEmpty($session->id);
-        $this->assertEquals('2024-11-05', $session->protocolVersion);
-        $this->assertEquals(['tools' => true], $session->clientCapabilities);
-        $this->assertFalse($session->initialized);
-    }
-
-    public function testInitializeSession(): void
-    {
-        $session = $this->server->createSession('2024-11-05', []);
-        $initializedSession = $this->server->initializeSession($session->id);
-
-        $this->assertTrue($initializedSession->initialized);
-        $this->assertEquals($session->id, $initializedSession->id);
-    }
-
-    public function testRemoveSession(): void
-    {
-        $session = $this->server->createSession('2024-11-05', []);
-
-        $this->assertNotNull($this->server->getSession($session->id));
-
-        $this->server->removeSession($session->id);
-
-        $this->assertNull($this->server->getSession($session->id));
+        $response = $this->server->handleRequest($request);
+        $sessionId = $response->getHeaderLine('Mcp-Session-Id');
+        
+        // Send initialized notification
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json', 'Mcp-Session-Id' => $sessionId]);
+        $request = $request->withBody(Utils::streamFor(json_encode([
+            'jsonrpc' => '2.0',
+            'method' => 'initialized'
+        ])));
+        
+        $this->server->handleRequest($request);
+        
+        return $sessionId;
     }
 }
