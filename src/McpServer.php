@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace Soukicz\Mcp;
 
+use GuzzleHttp\Promise\PromiseInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use GuzzleHttp\Psr7\Response;
 use RuntimeException;
+use Soukicz\Llm\Client\Anthropic\AnthropicEncoder;
+use Soukicz\Llm\Message\LLMMessageContents;
+use Soukicz\Llm\Tool\ToolDefinition;
 use Soukicz\Mcp\Session\SessionManagerInterface;
 use Soukicz\Mcp\Session\ArraySessionManager;
 use Soukicz\Mcp\Exception\MethodNotFoundException;
@@ -15,6 +19,7 @@ use Soukicz\Mcp\Exception\InvalidParamsException;
 
 class McpServer
 {
+    /** @var ToolDefinition[] */
     private array $tools = [];
     private array $serverInfo = [
         'name' => 'php-mcp-server',
@@ -32,41 +37,9 @@ class McpServer
         $this->sessionManager = $sessionManager;
     }
 
-    public function registerTool(string $name, string $description, array $inputSchema, callable $handler): void
+    public function registerTool(ToolDefinition $toolDefinition): void
     {
-        if (empty($name)) {
-            throw new InvalidParamsException('Tool name cannot be empty');
-        }
-        
-        if (empty($description)) {
-            throw new InvalidParamsException('Tool description cannot be empty');
-        }
-        
-        $this->tools[$name] = [
-            'name' => $name,
-            'description' => $description,
-            'inputSchema' => $inputSchema,
-            'handler' => $handler
-        ];
-    }
-
-    public function unregisterTool(string $name): bool
-    {
-        if (isset($this->tools[$name])) {
-            unset($this->tools[$name]);
-            return true;
-        }
-        return false;
-    }
-
-    public function hasTool(string $name): bool
-    {
-        return isset($this->tools[$name]);
-    }
-
-    public function getRegisteredTools(): array
-    {
-        return array_keys($this->tools);
+        $this->tools[$toolDefinition->getName()] = $toolDefinition;
     }
 
     public function handleRequest(RequestInterface $request): ResponseInterface
@@ -212,10 +185,14 @@ class McpServer
     {
         $tools = [];
         foreach ($this->tools as $tool) {
+            $schema = $tool->getInputSchema();
+            if (empty($schema['properties'])) {
+                $schema['properties'] = new \stdClass();
+            }
             $tools[] = [
-                'name' => $tool['name'],
-                'description' => $tool['description'],
-                'inputSchema' => $tool['inputSchema']
+                'name' => $tool->getName(),
+                'description' => $tool->getDescription(),
+                'inputSchema' => $schema
             ];
         }
 
@@ -236,18 +213,27 @@ class McpServer
         }
 
         $tool = $this->tools[$toolName];
-        $handler = $tool['handler'];
 
         try {
-            $result = $handler($arguments);
-            return [
-                'content' => [
-                    [
-                        'type' => 'text',
-                        'text' => is_string($result) ? $result : json_encode($result)
-                    ]
-                ]
-            ];
+            $result = $tool->handle($arguments);
+
+            if ($result instanceof PromiseInterface) {
+                $resultData = $result->wait();
+            } else {
+                $resultData = $result;
+            }
+
+            $data = [];
+            if ($resultData->isError()) {
+                $data['isError'] = true;
+            }
+            $data['content'] = [];
+            $encoder = new AnthropicEncoder();
+            foreach ($resultData->getMessages() as $message) {
+                $data['content'][] = $encoder->encodeMessageContent($message);
+            }
+
+            return $data;
         } catch (\Throwable $e) {
             throw new RuntimeException('Tool execution failed: ' . $e->getMessage(), -32603);
         }

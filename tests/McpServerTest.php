@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Soukicz\Mcp\Tests;
 
 use PHPUnit\Framework\TestCase;
+use Soukicz\Llm\Message\LLMMessageContents;
+use Soukicz\Llm\Tool\CallbackToolDefinition;
 use Soukicz\Mcp\McpServer;
 use Soukicz\Mcp\Session\ArraySessionManager;
 use GuzzleHttp\Psr7\ServerRequest;
@@ -19,7 +21,7 @@ class McpServerTest extends TestCase
         $sessionManager = new ArraySessionManager();
         $this->server = new McpServer(['name' => 'test-server', 'version' => '1.0.0'], $sessionManager);
         
-        $this->server->registerTool(
+        $this->server->registerTool(new CallbackToolDefinition(
             'echo',
             'Echo back the input message',
             [
@@ -29,10 +31,10 @@ class McpServerTest extends TestCase
                 ],
                 'required' => ['message']
             ],
-            function (array $args): string {
-                return $args['message'] ?? '';
+            function (array $args): LLMMessageContents {
+                return LLMMessageContents::fromString($args['message']);
             }
-        );
+        ));
     }
 
     public function testInitialize(): void
