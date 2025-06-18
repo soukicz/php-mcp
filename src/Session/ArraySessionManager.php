@@ -8,6 +8,7 @@ class ArraySessionManager implements SessionManagerInterface
 {
     private array $sessions = [];
     private array $usedRequestIds = [];
+    private array $pendingMessages = [];
     private int $sessionTtl;
 
     public function __construct(int $sessionTtl = 3600)
@@ -117,5 +118,26 @@ class ArraySessionManager implements SessionManagerInterface
     public function getAllSessions(): array
     {
         return $this->sessions;
+    }
+
+    public function queueMessage(string $sessionId, array $message): void
+    {
+        if (!isset($this->pendingMessages[$sessionId])) {
+            $this->pendingMessages[$sessionId] = [];
+        }
+        
+        $this->pendingMessages[$sessionId][] = $message;
+    }
+
+    public function getPendingMessages(string $sessionId): array
+    {
+        if (!isset($this->pendingMessages[$sessionId])) {
+            return [];
+        }
+        
+        $messages = $this->pendingMessages[$sessionId];
+        $this->pendingMessages[$sessionId] = []; // Clear after retrieving
+        
+        return $messages;
     }
 }

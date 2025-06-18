@@ -10,10 +10,8 @@ use Psr\Http\Message\ResponseInterface;
 use GuzzleHttp\Psr7\Response;
 use RuntimeException;
 use Soukicz\Llm\Client\Anthropic\AnthropicEncoder;
-use Soukicz\Llm\Message\LLMMessageContents;
 use Soukicz\Llm\Tool\ToolDefinition;
 use Soukicz\Mcp\Session\SessionManagerInterface;
-use Soukicz\Mcp\Session\ArraySessionManager;
 use Soukicz\Mcp\Exception\MethodNotFoundException;
 use Soukicz\Mcp\Exception\InvalidParamsException;
 
@@ -216,13 +214,32 @@ class McpServer
     private function handleGetRequest(RequestInterface $request): ResponseInterface
     {
         // GET is used for SSE (Server-Sent Events) streaming
-        // SSE is optional per MCP specification - return proper error response
+        // For PHP-FPM environments, we provide immediate SSE responses without long connections
+        $sessionId = $request->getHeaderLine('Mcp-Session-Id');
+        
+        if (empty($sessionId)) {
+            $sessionId = $this->generateSessionId();
+        }
+
+        // Send required SSE endpoint event immediately and close connection
+        $endpointEvent = "event: endpoint\ndata: " . json_encode([
+            'uri' => $request->getUri()->getPath() ?: '/mcp',
+        ], JSON_THROW_ON_ERROR) . "\n\n";
+
+        // For PHP-FPM compatibility: send immediate response and close
+        // No persistent connection - client will reconnect as needed
+        $content = $endpointEvent;
+        
+        // Include any pending messages for this session
+        $content .= $this->getPendingSseMessages($sessionId);
+
         return new Response(200, [
             'Content-Type' => 'text/event-stream',
             'Cache-Control' => 'no-cache',
-            'Connection' => 'keep-alive',
-            'X-Accel-Buffering' => 'no'
-        ], "event: error\ndata: {\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32601,\"message\":\"SSE streaming not supported\",\"data\":\"This server implements basic HTTP transport without SSE streaming capability\"}}\n\n");
+            'Connection' => 'close', // Close connection immediately
+            'X-Accel-Buffering' => 'no',
+            'Mcp-Session-Id' => $sessionId
+        ], $content);
     }
 
     private function handlePostRequest(RequestInterface $request): ResponseInterface
@@ -350,5 +367,71 @@ class McpServer
     public function cleanupExpiredSessions(): int
     {
         return $this->sessionManager->cleanupExpiredSessions();
+    }
+
+    public function queueServerMessage(string $sessionId, string $method, array $params = [], $id = null): void
+    {
+        $message = [
+            'jsonrpc' => '2.0',
+            'method' => $method,
+            'params' => $params
+        ];
+        
+        if ($id !== null) {
+            $message['id'] = $id;
+        }
+
+        $this->sessionManager->queueMessage($sessionId, $message);
+    }
+
+    public function queueServerResponse(string $sessionId, array $result, $id): void
+    {
+        $response = [
+            'jsonrpc' => '2.0',
+            'result' => $result,
+            'id' => $id
+        ];
+
+        $this->sessionManager->queueMessage($sessionId, $response);
+    }
+
+    public function queueServerError(string $sessionId, int $code, string $message, $data = null, $id = null): void
+    {
+        $error = [
+            'code' => $code,
+            'message' => $message
+        ];
+        
+        if ($data !== null) {
+            $error['data'] = $data;
+        }
+
+        $response = [
+            'jsonrpc' => '2.0',
+            'error' => $error
+        ];
+        
+        if ($id !== null) {
+            $response['id'] = $id;
+        }
+
+        $this->sessionManager->queueMessage($sessionId, $response);
+    }
+
+    public function formatSseMessage(array $message): string
+    {
+        return "event: message\ndata: " . json_encode($message) . "\n\n";
+    }
+
+    public function getPendingSseMessages(string $sessionId): string
+    {
+        $messages = $this->sessionManager->getPendingMessages($sessionId);
+        $sseContent = '';
+        
+        foreach ($messages as $message) {
+            $sseContent .= $this->formatSseMessage($message);
+        }
+        
+        return $sseContent;
     }
 }

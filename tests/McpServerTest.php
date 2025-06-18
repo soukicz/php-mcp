@@ -117,9 +117,10 @@ class McpServerTest extends TestCase
         
         $this->assertEquals(200, $response->getStatusCode());
         $this->assertEquals('text/event-stream', $response->getHeaderLine('Content-Type'));
-        $this->assertStringContainsString('event: error', (string) $response->getBody());
-        $this->assertStringContainsString('SSE streaming not supported', (string) $response->getBody());
-        $this->assertStringContainsString('"code":-32601', (string) $response->getBody());
+        $this->assertEquals('close', $response->getHeaderLine('Connection'));
+        $this->assertStringContainsString('event: endpoint', (string) $response->getBody());
+        $this->assertStringContainsString('\/mcp', (string) $response->getBody());
+        $this->assertNotEmpty($response->getHeaderLine('Mcp-Session-Id'));
     }
     
     public function testInvalidMethod(): void
@@ -158,6 +159,50 @@ class McpServerTest extends TestCase
         $body = json_decode((string) $response->getBody(), true);
         $this->assertArrayHasKey('error', $body);
         $this->assertStringContainsString('Missing Mcp-Session-Id', $body['error']);
+    }
+
+    public function testSseServerMessaging(): void
+    {
+        $sessionId = 'test-session';
+        
+        // Queue server messages
+        $this->server->queueServerMessage($sessionId, 'tools/list_changed');
+        $this->server->queueServerResponse($sessionId, ['tools' => []], 'test-id');
+        $this->server->queueServerError($sessionId, -32600, 'Invalid request', null, 'error-id');
+        
+        // Get pending messages as SSE
+        $sseContent = $this->server->getPendingSseMessages($sessionId);
+        
+        $this->assertStringContainsString('event: message', $sseContent);
+        $this->assertStringContainsString('"method":"tools\/list_changed"', $sseContent);
+        $this->assertStringContainsString('"result":', $sseContent);
+        $this->assertStringContainsString('"id":"test-id"', $sseContent);
+        $this->assertStringContainsString('"error":', $sseContent);
+        $this->assertStringContainsString('"code":-32600', $sseContent);
+        
+        // Test individual format method
+        $formattedMessage = $this->server->formatSseMessage(['test' => 'data']);
+        $this->assertStringContainsString('event: message', $formattedMessage);
+        $this->assertStringContainsString('"test":"data"', $formattedMessage);
+    }
+
+    public function testGetRequestWithPendingMessages(): void
+    {
+        $sessionId = 'test-session-with-messages';
+        
+        // Queue some messages
+        $this->server->queueServerMessage($sessionId, 'tools/list_changed');
+        
+        $request = new ServerRequest('GET', '/mcp', ['Mcp-Session-Id' => $sessionId]);
+        $response = $this->server->handleRequest($request);
+        
+        $body = (string) $response->getBody();
+        
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals('text/event-stream', $response->getHeaderLine('Content-Type'));
+        $this->assertStringContainsString('event: endpoint', $body);
+        $this->assertStringContainsString('event: message', $body);
+        $this->assertStringContainsString('"method":"tools\/list_changed"', $body);
     }
 
     public function testInvalidJson(): void

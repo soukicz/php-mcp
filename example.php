@@ -10,7 +10,7 @@ use Soukicz\Llm\Tool\CallbackToolDefinition;
 use Soukicz\Mcp\McpServer;
 use Soukicz\Mcp\Session\FileSessionManager;
 
-$sessionManager = new FileSessionManager(sys_get_temp_dir(), 3600, true); // Enable auto-initialization
+$sessionManager = new FileSessionManager(sys_get_temp_dir(), 3600, true);
 $server = new McpServer([
     'name' => 'example-mcp-server',
     'version' => '1.0.0'

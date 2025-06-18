@@ -185,9 +185,61 @@ class FileSessionManager implements SessionManagerInterface
         return $cleanedCount;
     }
 
+    public function queueMessage(string $sessionId, array $message): void
+    {
+        $messagesFile = $this->getMessagesFilePath($sessionId);
+        
+        // Load existing messages
+        $messages = [];
+        if (file_exists($messagesFile)) {
+            $content = file_get_contents($messagesFile);
+            if ($content !== false) {
+                $decoded = json_decode($content, true);
+                if (is_array($decoded)) {
+                    $messages = $decoded;
+                }
+            }
+        }
+        
+        // Add new message
+        $messages[] = $message;
+        
+        // Save back to file
+        file_put_contents($messagesFile, json_encode($messages, JSON_THROW_ON_ERROR));
+    }
+
+    public function getPendingMessages(string $sessionId): array
+    {
+        $messagesFile = $this->getMessagesFilePath($sessionId);
+        
+        if (!file_exists($messagesFile)) {
+            return [];
+        }
+        
+        $content = file_get_contents($messagesFile);
+        if ($content === false) {
+            return [];
+        }
+        
+        $messages = json_decode($content, true);
+        if (!is_array($messages)) {
+            return [];
+        }
+        
+        // Clear messages file after reading
+        unlink($messagesFile);
+        
+        return $messages;
+    }
+
     private function getSessionFilePath(string $sessionId): string
     {
         return $this->sessionDir . '/session_' . $sessionId . '.json';
+    }
+
+    private function getMessagesFilePath(string $sessionId): string
+    {
+        return $this->sessionDir . '/messages_' . $sessionId . '.json';
     }
 
     private function readSessionFile(string $sessionId): ?array
