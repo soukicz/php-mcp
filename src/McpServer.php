@@ -160,7 +160,9 @@ class McpServer
         return [
             'protocolVersion' => '2024-11-05',
             'capabilities' => [
-                'tools' => new \stdClass()
+                'tools' => [
+                    'listChanged' => false
+                ]
             ],
             'serverInfo' => $this->serverInfo
         ];
@@ -279,12 +281,7 @@ class McpServer
     private function encodeJson(array $data): string
     {
         // Custom JSON encoding to handle MCP-specific requirements
-        $json = json_encode($data, JSON_UNESCAPED_SLASHES);
-        
-        // Fix the capabilities.tools empty array to be an empty object
-        $json = preg_replace('/"capabilities":\s*\{\s*"tools":\s*\[\s*\]/', '"capabilities":{"tools":{}', $json);
-        
-        return $json;
+        return json_encode($data, JSON_UNESCAPED_SLASHES);
     }
 
     private function generateSessionId(): string
