@@ -89,29 +89,6 @@ class FileSessionManager extends AbstractSessionManager
         }
     }
 
-    protected function getAllSessionIds(): array
-    {
-        if (!is_dir($this->sessionDir)) {
-            return [];
-        }
-
-        $files = glob($this->sessionDir . '/session_*.json');
-
-        if ($files === false) {
-            return [];
-        }
-
-        $sessionIds = [];
-        foreach ($files as $file) {
-            $filename = basename($file);
-            if (preg_match('/^session_(.+)\.json$/', $filename, $matches)) {
-                $sessionIds[] = $matches[1];
-            }
-        }
-
-        return $sessionIds;
-    }
-
     protected function readMessagesData(string $sessionId): array
     {
         $messagesFile = $this->getMessagesFilePath($sessionId);

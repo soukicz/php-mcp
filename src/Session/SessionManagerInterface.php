@@ -20,8 +20,6 @@ interface SessionManagerInterface
 
     public function markRequestIdUsed(string $sessionId, string $requestId): void;
 
-    public function cleanupExpiredSessions(): int;
-
     public function queueMessage(string $sessionId, array $message): void;
 
     public function getPendingMessages(string $sessionId): array;

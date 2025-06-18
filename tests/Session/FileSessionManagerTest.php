@@ -117,29 +117,6 @@ class FileSessionManagerTest extends TestCase
         $this->assertNull($shortTtlManager->getSessionInfo($sessionId));
     }
 
-    public function testCleanupExpiredSessions(): void
-    {
-        // Create sessions with different managers to simulate different creation times
-        $shortTtlManager = new FileSessionManager($this->tempDir, 1); // 1 second TTL
-        
-        $sessionId1 = 'test-session-cleanup-1';
-        $sessionId2 = 'test-session-cleanup-2';
-        $clientInfo = ['name' => 'test-client', 'version' => '1.0.0'];
-
-        // Create first session
-        $shortTtlManager->createSession($sessionId1, $clientInfo);
-        sleep(2); // Let it expire
-        
-        // Create second session (should not expire)
-        $shortTtlManager->createSession($sessionId2, $clientInfo);
-        
-        $cleanedCount = $shortTtlManager->cleanupExpiredSessions();
-        
-        $this->assertGreaterThanOrEqual(1, $cleanedCount);
-        $this->assertNull($shortTtlManager->getSessionInfo($sessionId1));
-        $this->assertNotNull($shortTtlManager->getSessionInfo($sessionId2));
-    }
-
     public function testSessionDirectoryValidation(): void
     {
         $nonExistentDir = sys_get_temp_dir() . '/mcp-test-nonexistent-' . uniqid();

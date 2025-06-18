@@ -24,11 +24,6 @@ class ArraySessionManager extends AbstractSessionManager
         unset($this->sessions[$sessionId]);
     }
 
-    protected function getAllSessionIds(): array
-    {
-        return array_keys($this->sessions);
-    }
-
     protected function readMessagesData(string $sessionId): array
     {
         return $this->pendingMessages[$sessionId] ?? [];

@@ -364,11 +364,6 @@ class McpServer
         $this->sessionManager->terminateSession($sessionId);
     }
 
-    public function cleanupExpiredSessions(): int
-    {
-        return $this->sessionManager->cleanupExpiredSessions();
-    }
-
     public function queueServerMessage(string $sessionId, string $method, array $params = [], $id = null): void
     {
         $message = [

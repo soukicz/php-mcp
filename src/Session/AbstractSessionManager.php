@@ -125,23 +125,6 @@ abstract class AbstractSessionManager implements SessionManagerInterface
         $this->deleteMessagesData($sessionId);
     }
 
-    public function cleanupExpiredSessions(): int
-    {
-        $currentTime = time();
-        $cleaned = 0;
-
-        foreach ($this->getAllSessionIds() as $sessionId) {
-            $sessionData = $this->readSessionData($sessionId);
-
-            if ($sessionData === null || $this->isSessionExpired($sessionData)) {
-                $this->terminateSession($sessionId);
-                $cleaned++;
-            }
-        }
-
-        return $cleaned;
-    }
-
     public function queueMessage(string $sessionId, array $message): void
     {
         $messages = $this->readMessagesData($sessionId);
@@ -179,8 +162,6 @@ abstract class AbstractSessionManager implements SessionManagerInterface
     abstract protected function writeSessionData(string $sessionId, array $sessionData): void;
 
     abstract protected function deleteSessionData(string $sessionId): void;
-
-    abstract protected function getAllSessionIds(): array;
 
     abstract protected function readMessagesData(string $sessionId): array;
 

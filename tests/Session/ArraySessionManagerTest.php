@@ -88,25 +88,6 @@ class ArraySessionManagerTest extends TestCase
         $this->assertEquals(1, $this->sessionManager->getSessionCount());
     }
 
-    public function testCleanupExpiredSessions(): void
-    {
-        // Create session manager with very short TTL for testing
-        $sessionManager = new ArraySessionManager(1); // 1 second TTL
-
-        $sessionManager->createSession('session-1', []);
-        $sessionManager->createSession('session-2', []);
-
-        $this->assertEquals(2, $sessionManager->getSessionCount());
-
-        // Wait for sessions to expire
-        sleep(2);
-
-        $cleaned = $sessionManager->cleanupExpiredSessions();
-
-        $this->assertEquals(2, $cleaned);
-        $this->assertEquals(0, $sessionManager->getSessionCount());
-    }
-
     public function testNonExistentSession(): void
     {
         $this->assertNull($this->sessionManager->getSessionInfo('non-existent'));
