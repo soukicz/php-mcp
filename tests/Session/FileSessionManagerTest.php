@@ -42,7 +42,7 @@ class FileSessionManagerTest extends TestCase
         $this->assertEquals($clientInfo, $sessionInfo['clientInfo']);
         $this->assertFalse($sessionInfo['initialized']);
         $this->assertIsInt($sessionInfo['createdAt']);
-        $this->assertIsInt($sessionInfo['lastAccessedAt']);
+        $this->assertIsInt($sessionInfo['lastActivity']);
         $this->assertIsArray($sessionInfo['usedRequestIds']);
         $this->assertEmpty($sessionInfo['usedRequestIds']);
     }
