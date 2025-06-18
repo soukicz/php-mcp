@@ -143,29 +143,26 @@ class McpServer
 
         $tool = $this->tools[$toolName];
 
-        try {
-            $result = $tool->handle($arguments);
 
-            if ($result instanceof PromiseInterface) {
-                $resultData = $result->wait();
-            } else {
-                $resultData = $result;
-            }
+        $result = $tool->handle($arguments);
 
-            $data = [];
-            if ($resultData->isError()) {
-                $data['isError'] = true;
-            }
-            $data['content'] = [];
-            $encoder = new AnthropicEncoder();
-            foreach ($resultData->getMessages() as $message) {
-                $data['content'][] = $encoder->encodeMessageContent($message);
-            }
-
-            return $data;
-        } catch (\Throwable $e) {
-            throw new RuntimeException('Tool execution failed: ' . $e->getMessage(), -32603);
+        if ($result instanceof PromiseInterface) {
+            $resultData = $result->wait();
+        } else {
+            $resultData = $result;
         }
+
+        $data = [];
+        if ($resultData->isError()) {
+            $data['isError'] = true;
+        }
+        $data['content'] = [];
+        $encoder = new AnthropicEncoder();
+        foreach ($resultData->getMessages() as $message) {
+            $data['content'][] = $encoder->encodeMessageContent($message);
+        }
+
+        return $data;
     }
 
     private function createSuccessResponse(array $result, $id = null): ResponseInterface
