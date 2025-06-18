@@ -5,15 +5,15 @@ declare(strict_types=1);
 namespace Soukicz\Mcp;
 
 use GuzzleHttp\Promise\PromiseInterface;
+use GuzzleHttp\Psr7\Response;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
-use GuzzleHttp\Psr7\Response;
 use RuntimeException;
 use Soukicz\Llm\Client\Anthropic\AnthropicEncoder;
 use Soukicz\Llm\Tool\ToolDefinition;
-use Soukicz\Mcp\Session\SessionManagerInterface;
-use Soukicz\Mcp\Exception\MethodNotFoundException;
 use Soukicz\Mcp\Exception\InvalidParamsException;
+use Soukicz\Mcp\Exception\MethodNotFoundException;
+use Soukicz\Mcp\Session\SessionManagerInterface;
 
 class McpServer
 {
@@ -30,7 +30,7 @@ class McpServer
         if (isset($serverInfo['name']) && empty($serverInfo['name'])) {
             throw new InvalidParamsException('Server name cannot be empty');
         }
-        
+
         $this->serverInfo = array_merge($this->serverInfo, $serverInfo);
         $this->sessionManager = $sessionManager;
     }
@@ -43,7 +43,7 @@ class McpServer
     public function handleRequest(RequestInterface $request): ResponseInterface
     {
         $method = $request->getMethod();
-        
+
         // Handle different HTTP methods
         switch ($method) {
             case 'GET':
@@ -65,7 +65,7 @@ class McpServer
             case 'initialized':
                 return $this->handleInitialized($sessionId);
             case 'ping':
-                return $this->handlePing();
+                return $this->handlePing($params);
             case 'tools/list':
                 return $this->handleToolsList();
             case 'tools/call':
@@ -78,10 +78,10 @@ class McpServer
     private function handleInitialize(array $params, string $sessionId): array
     {
         $clientInfo = $params['clientInfo'] ?? [];
-        
+
         // Store session info but don't mark as initialized yet
         $this->sessionManager->createSession($sessionId, $clientInfo);
-        
+
         return [
             'protocolVersion' => '2024-11-05',
             'capabilities' => [
@@ -98,13 +98,19 @@ class McpServer
         if ($this->sessionManager->getSessionInfo($sessionId) === null) {
             throw new RuntimeException('Session not found', -32600);
         }
-        
+
         $this->sessionManager->markSessionInitialized($sessionId);
         return []; // initialized is a notification, but we return empty array for consistency
     }
 
-    private function handlePing(): array
+    private function handlePing(array $params = []): array
     {
+        // According to MCP spec, ping should return empty result
+        // However, some clients might expect meta fields to be echoed back
+        if (isset($params['_meta'])) {
+            return ['_meta' => $params['_meta']];
+        }
+
         return [];
     }
 
@@ -165,9 +171,12 @@ class McpServer
 
     private function createSuccessResponse(array $result, $id = null): ResponseInterface
     {
+        // Convert empty array to empty object for JSON encoding
+        $jsonResult = empty($result) ? new \stdClass() : $result;
+
         $response = [
             'jsonrpc' => '2.0',
-            'result' => $result
+            'result' => $jsonResult
         ];
 
         if ($id !== null) {
@@ -216,20 +225,20 @@ class McpServer
         // GET is used for SSE (Server-Sent Events) streaming
         // For PHP-FPM environments, we provide immediate SSE responses without long connections
         $sessionId = $request->getHeaderLine('Mcp-Session-Id');
-        
+
         if (empty($sessionId)) {
             $sessionId = $this->generateSessionId();
         }
 
         // Send required SSE endpoint event immediately and close connection
         $endpointEvent = "event: endpoint\ndata: " . json_encode([
-            'uri' => $request->getUri()->getPath() ?: '/mcp',
-        ], JSON_THROW_ON_ERROR) . "\n\n";
+                'uri' => $request->getUri()->getPath() ?: '/mcp',
+            ], JSON_THROW_ON_ERROR) . "\n\n";
 
         // For PHP-FPM compatibility: send immediate response and close
         // No persistent connection - client will reconnect as needed
         $content = $endpointEvent;
-        
+
         // Include any pending messages for this session
         $content .= $this->getPendingSseMessages($sessionId);
 
@@ -255,15 +264,24 @@ class McpServer
             return $this->createErrorResponse(-32600, 'Invalid Request', 'Content-Type must be application/json', null);
         }
 
-        $body = (string) $request->getBody();
+        $body = (string)$request->getBody();
         $data = json_decode($body, true);
 
         if (json_last_error() !== JSON_ERROR_NONE) {
             return $this->createErrorResponse(-32700, 'Parse error', 'Invalid JSON', null);
         }
 
-        if (!isset($data['jsonrpc']) || $data['jsonrpc'] !== '2.0') {
+        // Be lenient with jsonrpc field for certain methods (like ping) for MCP Inspector compatibility
+        $method = $data['method'] ?? null;
+        $isLenientMethod = in_array($method, ['ping']);
+
+        if (!$isLenientMethod && (!isset($data['jsonrpc']) || $data['jsonrpc'] !== '2.0')) {
             return $this->createErrorResponse(-32600, 'Invalid Request', 'Missing or invalid jsonrpc version', $data['id'] ?? null);
+        }
+
+        // Set default jsonrpc version if missing for lenient methods
+        if (!isset($data['jsonrpc'])) {
+            $data['jsonrpc'] = '2.0';
         }
 
         if (!isset($data['method'])) {
@@ -271,18 +289,18 @@ class McpServer
         }
 
         $id = $data['id'] ?? null;
-        $method = $data['method'];
+        // $method already assigned above
         $params = $data['params'] ?? [];
 
         // Handle notifications (requests without ID)
         $isNotification = !isset($data['id']);
-        
+
         // Validate request ID for non-notifications
         if (!$isNotification) {
             if ($id === null) {
                 return $this->createErrorResponse(-32600, 'Invalid Request', 'Request ID must not be null', null);
             }
-            
+
             if ($this->sessionManager->isRequestIdUsed($sessionId, (string)$id)) {
                 return $this->createErrorResponse(-32600, 'Invalid Request', 'Request ID already used in this session', $id);
             }
@@ -295,20 +313,25 @@ class McpServer
         }
 
         try {
+            // Handle ping notifications specially - they should not get any response
+            if ($method === 'ping' && $isNotification) {
+                return new Response(204); // No Content for ping notifications
+            }
+
             $result = $this->handleMethod($method, $params, $sessionId);
-            
+
             if ($isNotification) {
                 // Notifications don't get responses
                 return new Response(204); // No Content
             }
-            
+
             $response = $this->createSuccessResponse($result, $id);
-            
+
             // Add session ID header for initialize responses
             if ($method === 'initialize') {
                 $response = $response->withHeader('Mcp-Session-Id', $sessionId);
             }
-            
+
             return $response;
         } catch (InvalidParamsException|MethodNotFoundException $e) {
             if ($isNotification) {
@@ -332,7 +355,7 @@ class McpServer
     {
         // DELETE is used for session termination
         $sessionId = $request->getHeaderLine('Mcp-Session-Id');
-        
+
         if (empty($sessionId)) {
             return new Response(400, ['Content-Type' => 'application/json'], json_encode([
                 'error' => 'Missing Mcp-Session-Id header'
@@ -371,7 +394,7 @@ class McpServer
             'method' => $method,
             'params' => $params
         ];
-        
+
         if ($id !== null) {
             $message['id'] = $id;
         }
@@ -396,7 +419,7 @@ class McpServer
             'code' => $code,
             'message' => $message
         ];
-        
+
         if ($data !== null) {
             $error['data'] = $data;
         }
@@ -405,7 +428,7 @@ class McpServer
             'jsonrpc' => '2.0',
             'error' => $error
         ];
-        
+
         if ($id !== null) {
             $response['id'] = $id;
         }
@@ -422,11 +445,11 @@ class McpServer
     {
         $messages = $this->sessionManager->getPendingMessages($sessionId);
         $sseContent = '';
-        
+
         foreach ($messages as $message) {
             $sseContent .= $this->formatSseMessage($message);
         }
-        
+
         return $sseContent;
     }
 }

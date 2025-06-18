@@ -205,6 +205,92 @@ class McpServerTest extends TestCase
         $this->assertStringContainsString('"method":"tools\/list_changed"', $body);
     }
 
+    public function testPingNotification(): void
+    {
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json']);
+        $request = $request->withBody(Utils::streamFor(json_encode([
+            'jsonrpc' => '2.0',
+            'method' => 'ping'
+            // No ID - this is a notification
+        ])));
+
+        $response = $this->server->handleRequest($request);
+        
+        $this->assertEquals(204, $response->getStatusCode());
+        $this->assertEquals('', (string) $response->getBody());
+    }
+
+    public function testPingRequest(): void
+    {
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json']);
+        $request = $request->withBody(Utils::streamFor(json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 'ping-request',
+            'method' => 'ping'
+        ])));
+
+        $response = $this->server->handleRequest($request);
+        $body = json_decode((string) $response->getBody(), true);
+        
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals('2.0', $body['jsonrpc']);
+        $this->assertEquals('ping-request', $body['id']);
+        $this->assertArrayHasKey('result', $body);
+        $this->assertEquals([], $body['result']); // JSON object {} is decoded as empty array [] in PHP
+    }
+
+    public function testPingWithMetaParams(): void
+    {
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json']);
+        $request = $request->withBody(Utils::streamFor(json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 'ping-with-meta',
+            'method' => 'ping',
+            'params' => [
+                '_meta' => [
+                    'progressToken' => 123
+                ]
+            ]
+        ])));
+
+        $response = $this->server->handleRequest($request);
+        $body = json_decode((string) $response->getBody(), true);
+        
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals('2.0', $body['jsonrpc']);
+        $this->assertEquals('ping-with-meta', $body['id']);
+        $this->assertArrayHasKey('result', $body);
+        $this->assertArrayHasKey('_meta', $body['result']);
+        $this->assertEquals(['progressToken' => 123], $body['result']['_meta']);
+    }
+
+    public function testMcpInspectorPingCompatibility(): void
+    {
+        // Test MCP Inspector's simplified ping format (missing jsonrpc field)
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json']);
+        $request = $request->withBody(Utils::streamFor('{"method": "ping"}'));
+
+        $response = $this->server->handleRequest($request);
+        
+        $this->assertEquals(204, $response->getStatusCode());
+        $this->assertEquals('', (string) $response->getBody());
+    }
+
+    public function testNonPingMethodsStillRequireJsonrpc(): void
+    {
+        // Test that non-ping methods still require jsonrpc field
+        $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json']);
+        $request = $request->withBody(Utils::streamFor('{"method": "tools/list", "id": 1}'));
+
+        $response = $this->server->handleRequest($request);
+        $body = json_decode((string) $response->getBody(), true);
+        
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertArrayHasKey('error', $body);
+        $this->assertEquals(-32600, $body['error']['code']);
+        $this->assertStringContainsString('Missing or invalid jsonrpc version', $body['error']['data']);
+    }
+
     public function testInvalidJson(): void
     {
         $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json']);
