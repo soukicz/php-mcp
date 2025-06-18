@@ -44,91 +44,18 @@ class McpServer
 
     public function handleRequest(RequestInterface $request): ResponseInterface
     {
-        if ($request->getMethod() !== 'POST') {
-            return $this->createErrorResponse(-32600, 'Invalid Request', 'Only POST method is supported', null);
-        }
-
-        // Handle session management
-        $sessionId = $request->getHeaderLine('Mcp-Session-Id');
-        if (empty($sessionId)) {
-            $sessionId = $this->generateSessionId();
-        }
-
-        $contentType = $request->getHeaderLine('Content-Type');
-        if (strpos($contentType, 'application/json') === false) {
-            return $this->createErrorResponse(-32600, 'Invalid Request', 'Content-Type must be application/json', null);
-        }
-
-        $body = (string) $request->getBody();
-        $data = json_decode($body, true);
-
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            return $this->createErrorResponse(-32700, 'Parse error', 'Invalid JSON', null);
-        }
-
-        if (!isset($data['jsonrpc']) || $data['jsonrpc'] !== '2.0') {
-            return $this->createErrorResponse(-32600, 'Invalid Request', 'Missing or invalid jsonrpc version', $data['id'] ?? null);
-        }
-
-        if (!isset($data['method'])) {
-            return $this->createErrorResponse(-32600, 'Invalid Request', 'Missing method', $data['id'] ?? null);
-        }
-
-        $id = $data['id'] ?? null;
-        $method = $data['method'];
-        $params = $data['params'] ?? [];
-
-        // Handle notifications (requests without ID)
-        $isNotification = !isset($data['id']);
+        $method = $request->getMethod();
         
-        // Validate request ID for non-notifications
-        if (!$isNotification) {
-            if ($id === null) {
-                return $this->createErrorResponse(-32600, 'Invalid Request', 'Request ID must not be null', null);
-            }
-            
-            if ($this->sessionManager->isRequestIdUsed($sessionId, (string)$id)) {
-                return $this->createErrorResponse(-32600, 'Invalid Request', 'Request ID already used in this session', $id);
-            }
-            $this->sessionManager->markRequestIdUsed($sessionId, (string)$id);
-        }
-
-        // Check if session is initialized for restricted methods
-        if (!$this->sessionManager->isSessionInitialized($sessionId) && !in_array($method, ['initialize', 'initialized', 'ping'])) {
-            return $this->createErrorResponse(-32600, 'Invalid Request', 'Session not initialized', $id);
-        }
-
-        try {
-            $result = $this->handleMethod($method, $params, $sessionId);
-            
-            if ($isNotification) {
-                // Notifications don't get responses
-                return new Response(204); // No Content
-            }
-            
-            $response = $this->createSuccessResponse($result, $id);
-            
-            // Add session ID header for initialize responses
-            if ($method === 'initialize') {
-                $response = $response->withHeader('Mcp-Session-Id', $sessionId);
-            }
-            
-            return $response;
-        } catch (InvalidParamsException|MethodNotFoundException $e) {
-            if ($isNotification) {
-                return new Response(204); // Notifications don't get error responses
-            }
-            return $this->createErrorResponse($e->getCode(), $e->getMessage(), null, $id);
-        } catch (RuntimeException $e) {
-            if ($isNotification) {
-                return new Response(204);
-            }
-            return $this->createErrorResponse($e->getCode(), $e->getMessage(), null, $id);
-        } catch (\Throwable $e) {
-            if ($isNotification) {
-                return new Response(204);
-            }
-            return $this->createErrorResponse(-32603, 'Internal error', $e->getMessage(), $id);
+        // Handle different HTTP methods
+        switch ($method) {
+            case 'GET':
+                return $this->handleGetRequest($request);
+            case 'POST':
+                return $this->handlePostRequest($request);
+            case 'DELETE':
+                return $this->handleDeleteRequest($request);
+            default:
+                return new Response(405, ['Allow' => 'GET, POST, DELETE']);
         }
     }
 
@@ -287,6 +214,125 @@ class McpServer
     private function generateSessionId(): string
     {
         return bin2hex(random_bytes(16));
+    }
+
+    private function handleGetRequest(RequestInterface $request): ResponseInterface
+    {
+        // GET is used for SSE (Server-Sent Events) streaming
+        // SSE is optional per MCP specification - return proper error response
+        return new Response(200, [
+            'Content-Type' => 'text/event-stream',
+            'Cache-Control' => 'no-cache',
+            'Connection' => 'keep-alive',
+            'X-Accel-Buffering' => 'no'
+        ], "event: error\ndata: {\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32601,\"message\":\"SSE streaming not supported\",\"data\":\"This server implements basic HTTP transport without SSE streaming capability\"}}\n\n");
+    }
+
+    private function handlePostRequest(RequestInterface $request): ResponseInterface
+    {
+        // Handle session management
+        $sessionId = $request->getHeaderLine('Mcp-Session-Id');
+        if (empty($sessionId)) {
+            $sessionId = $this->generateSessionId();
+        }
+
+        $contentType = $request->getHeaderLine('Content-Type');
+        if (strpos($contentType, 'application/json') === false) {
+            return $this->createErrorResponse(-32600, 'Invalid Request', 'Content-Type must be application/json', null);
+        }
+
+        $body = (string) $request->getBody();
+        $data = json_decode($body, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return $this->createErrorResponse(-32700, 'Parse error', 'Invalid JSON', null);
+        }
+
+        if (!isset($data['jsonrpc']) || $data['jsonrpc'] !== '2.0') {
+            return $this->createErrorResponse(-32600, 'Invalid Request', 'Missing or invalid jsonrpc version', $data['id'] ?? null);
+        }
+
+        if (!isset($data['method'])) {
+            return $this->createErrorResponse(-32600, 'Invalid Request', 'Missing method', $data['id'] ?? null);
+        }
+
+        $id = $data['id'] ?? null;
+        $method = $data['method'];
+        $params = $data['params'] ?? [];
+
+        // Handle notifications (requests without ID)
+        $isNotification = !isset($data['id']);
+        
+        // Validate request ID for non-notifications
+        if (!$isNotification) {
+            if ($id === null) {
+                return $this->createErrorResponse(-32600, 'Invalid Request', 'Request ID must not be null', null);
+            }
+            
+            if ($this->sessionManager->isRequestIdUsed($sessionId, (string)$id)) {
+                return $this->createErrorResponse(-32600, 'Invalid Request', 'Request ID already used in this session', $id);
+            }
+            $this->sessionManager->markRequestIdUsed($sessionId, (string)$id);
+        }
+
+        // Check if session is initialized for restricted methods
+        if (!$this->sessionManager->isSessionInitialized($sessionId) && !in_array($method, ['initialize', 'initialized', 'ping'])) {
+            return $this->createErrorResponse(-32600, 'Invalid Request', 'Session not initialized', $id);
+        }
+
+        try {
+            $result = $this->handleMethod($method, $params, $sessionId);
+            
+            if ($isNotification) {
+                // Notifications don't get responses
+                return new Response(204); // No Content
+            }
+            
+            $response = $this->createSuccessResponse($result, $id);
+            
+            // Add session ID header for initialize responses
+            if ($method === 'initialize') {
+                $response = $response->withHeader('Mcp-Session-Id', $sessionId);
+            }
+            
+            return $response;
+        } catch (InvalidParamsException|MethodNotFoundException $e) {
+            if ($isNotification) {
+                return new Response(204); // Notifications don't get error responses
+            }
+            return $this->createErrorResponse($e->getCode(), $e->getMessage(), null, $id);
+        } catch (RuntimeException $e) {
+            if ($isNotification) {
+                return new Response(204);
+            }
+            return $this->createErrorResponse($e->getCode(), $e->getMessage(), null, $id);
+        } catch (\Throwable $e) {
+            if ($isNotification) {
+                return new Response(204);
+            }
+            return $this->createErrorResponse(-32603, 'Internal error', $e->getMessage(), $id);
+        }
+    }
+
+    private function handleDeleteRequest(RequestInterface $request): ResponseInterface
+    {
+        // DELETE is used for session termination
+        $sessionId = $request->getHeaderLine('Mcp-Session-Id');
+        
+        if (empty($sessionId)) {
+            return new Response(400, ['Content-Type' => 'application/json'], json_encode([
+                'error' => 'Missing Mcp-Session-Id header'
+            ]));
+        }
+
+        try {
+            $this->sessionManager->terminateSession($sessionId);
+            return new Response(204); // No Content - successful deletion
+        } catch (\Throwable $e) {
+            return new Response(500, ['Content-Type' => 'application/json'], json_encode([
+                'error' => 'Failed to terminate session: ' . $e->getMessage()
+            ]));
+        }
     }
 
     public function getSessionManager(): SessionManagerInterface

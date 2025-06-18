@@ -109,17 +109,55 @@ class McpServerTest extends TestCase
         $this->assertEquals('Hello World', $body['result']['content'][0]['text']);
     }
 
-    public function testInvalidMethod(): void
+    public function testGetMethodReturnsSseResponse(): void
     {
         $request = new ServerRequest('GET', '/mcp');
         
         $response = $this->server->handleRequest($request);
-        $body = json_decode((string) $response->getBody(), true);
-
+        
         $this->assertEquals(200, $response->getStatusCode());
-        $this->assertEquals('2.0', $body['jsonrpc']);
+        $this->assertEquals('text/event-stream', $response->getHeaderLine('Content-Type'));
+        $this->assertStringContainsString('event: error', (string) $response->getBody());
+        $this->assertStringContainsString('SSE streaming not supported', (string) $response->getBody());
+        $this->assertStringContainsString('"code":-32601', (string) $response->getBody());
+    }
+    
+    public function testInvalidMethod(): void
+    {
+        $request = new ServerRequest('PUT', '/mcp');
+        
+        $response = $this->server->handleRequest($request);
+        
+        $this->assertEquals(405, $response->getStatusCode());
+        $this->assertEquals('GET, POST, DELETE', $response->getHeaderLine('Allow'));
+    }
+    
+    public function testDeleteMethodTerminatesSession(): void
+    {
+        // First create and initialize a session
+        $sessionId = $this->initializeSession();
+        
+        // Now test DELETE
+        $request = new ServerRequest('DELETE', '/mcp', ['Mcp-Session-Id' => $sessionId]);
+        
+        $response = $this->server->handleRequest($request);
+        
+        $this->assertEquals(204, $response->getStatusCode());
+        
+        // Verify session is terminated
+        $this->assertNull($this->server->getSessionInfo($sessionId));
+    }
+    
+    public function testDeleteMethodWithoutSessionId(): void
+    {
+        $request = new ServerRequest('DELETE', '/mcp');
+        
+        $response = $this->server->handleRequest($request);
+        
+        $this->assertEquals(400, $response->getStatusCode());
+        $body = json_decode((string) $response->getBody(), true);
         $this->assertArrayHasKey('error', $body);
-        $this->assertEquals(-32600, $body['error']['code']);
+        $this->assertStringContainsString('Missing Mcp-Session-Id', $body['error']);
     }
 
     public function testInvalidJson(): void
@@ -144,7 +182,7 @@ class McpServerTest extends TestCase
         $request = new ServerRequest('POST', '/mcp', ['Content-Type' => 'application/json', 'Mcp-Session-Id' => $sessionId]);
         $request = $request->withBody(Utils::streamFor(json_encode([
             'jsonrpc' => '2.0',
-            'id' => 4,
+            'id' => 'unknown-tool-test',
             'method' => 'tools/call',
             'params' => [
                 'name' => 'unknown_tool',
